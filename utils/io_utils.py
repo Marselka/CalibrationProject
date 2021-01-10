@@ -1,4 +1,5 @@
 import os
+import pcl
 import cv2 as cv
 import numpy as np
 import matplotlib.pyplot as plt
@@ -52,6 +53,37 @@ def get_cam_images(folder_path, period=None, file_name_list=None, return_file_na
             images.append(img)
 
         return images
+
+
+def get_pointclouds(folder_path, period=None, return_file_name=False):
+    file_names = sorted(os.listdir(folder_path), key=lambda s: s.lower())
+
+    pointclouds = []
+
+    if return_file_name:
+        chosen_file_names = []
+
+    for i, fname in enumerate(file_names):
+        if period is not None and i % period != 0:
+            continue
+
+        fpath = os.path.join(folder_path, fname)
+
+        if fpath.lower().endswith('pcd'):
+            pcd = pcl.load(fpath).to_array()
+            nan_mask = np.isnan(pcd).prod(axis=-1) == 1
+            pcd = pcd[~nan_mask, :]
+
+            pointclouds.append(pcd)
+
+            if return_file_name:
+                chosen_file_names.append(fname)
+
+    if return_file_name:
+        return pointclouds, chosen_file_names
+
+    else:
+        return pointclouds
 
 
 """
