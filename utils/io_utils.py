@@ -9,7 +9,7 @@ Functions for reading the data
 """
 
 
-def get_cam_images(folder_path, period=None, file_name_list=None, return_file_name=False):
+def get_images(folder_path, period=None, file_name_list=None):
     """
     :param folder_path: path to the folder with images
     :param period: the rate of considering images; used to reduce the final number of images
@@ -17,10 +17,7 @@ def get_cam_images(folder_path, period=None, file_name_list=None, return_file_na
     """
     file_names = sorted(os.listdir(folder_path), key=lambda s: s.lower())
 
-    images = []
-
-    if return_file_name:
-        chosen_file_names = []
+    images = {}
 
     if file_name_list is None:
         for i, fname in enumerate(file_names):
@@ -34,56 +31,55 @@ def get_cam_images(folder_path, period=None, file_name_list=None, return_file_na
                     fpath.lower().endswith('png'):
 
                 img = cv.imread(fpath)
-                images.append(img)
-
-                if return_file_name:
-                    chosen_file_names.append(fname)
-
-        if return_file_name:
-            return images, chosen_file_names
-
-        else:
-            return images
+                images[fname] = img
 
     else:
         for fname in file_name_list:
             fpath = os.path.join(folder_path, fname)
 
             img = cv.imread(fpath)
-            images.append(img)
+            images[fname] = img
 
-        return images
+    return images
 
 
-def get_pointclouds(folder_path, period=None, return_file_name=False):
+def get_pointclouds(folder_path, period=None, file_name_list=None):
+    """
+    :param folder_path: path to the folder with pointclouds
+    :param period: the rate of considering pointclouds
+    :param file_name_list: the list of file names to consider
+    :return:
+    """
     file_names = sorted(os.listdir(folder_path), key=lambda s: s.lower())
 
-    pointclouds = []
+    pointclouds = {}
 
-    if return_file_name:
-        chosen_file_names = []
+    if file_name_list is None:
+        for i, fname in enumerate(file_names):
+            if period is not None and i % period != 0:
+                continue
 
-    for i, fname in enumerate(file_names):
-        if period is not None and i % period != 0:
-            continue
+            fpath = os.path.join(folder_path, fname)
 
-        fpath = os.path.join(folder_path, fname)
+            if fpath.lower().endswith('pcd'):
 
-        if fpath.lower().endswith('pcd'):
+                pcd = pcl.load(fpath).to_array()
+                nan_mask = np.isnan(pcd).prod(axis=-1) == 1
+                pcd = pcd[~nan_mask, :]
+
+                pointclouds[fname] = pcd
+
+    else:
+        for fname in file_name_list:
+            fpath = os.path.join(folder_path, fname)
+
             pcd = pcl.load(fpath).to_array()
             nan_mask = np.isnan(pcd).prod(axis=-1) == 1
             pcd = pcd[~nan_mask, :]
 
-            pointclouds.append(pcd)
+            pointclouds[fname] = pcd
 
-            if return_file_name:
-                chosen_file_names.append(fname)
-
-    if return_file_name:
-        return pointclouds, chosen_file_names
-
-    else:
-        return pointclouds
+    return pointclouds
 
 
 """
@@ -103,13 +99,13 @@ def output_calib_results(intrinsics, dist_coeff, shape, images, idx, cam_id=None
     print("Undistored intrinsics: ")
     print(undist_intrinsics)
 
-    undist_img = cv.undistort(images[idx], intrinsics, dist_coeff, None, undist_intrinsics)
+    undist_img = cv.undistort(images[list(images.keys())[idx]], intrinsics, dist_coeff, None, undist_intrinsics)
 
     plt.figure(figsize=(9, 9))
     plt.imshow(undist_img)
 
     if cam_id is not None:
-        calib_fpath = 'calib_%s' % cam_id
+        calib_fpath = 'calib_output/%s_intrinsics' % cam_id
         calib = {'intrinsics': intrinsics,
                  'dist_coeff': dist_coeff,
                  'undist_intrinsics': undist_intrinsics}
@@ -185,11 +181,17 @@ Functions for visualization only
 """
 
 
-def draw_detections(images, results, pattern_size, idx):
-    loc_kp = results.get(idx)[1]
+def draw_detections(images, results, pattern_size, idx, normalize=False):
+    key = list(results.keys())[idx]
+    res = results.get(key)
 
-    if loc_kp is not None:
-        det_img = cv.drawChessboardCorners(np.copy(images[idx]), pattern_size, loc_kp, True)
+    if res is not None:
+        det_img = np.copy(images[key]).astype(np.float32)
+
+        if normalize:
+            det_img = det_img / det_img.reshape(-1, 3).max(axis=0).reshape(1, 1, 3)
+
+        det_img = cv.drawChessboardCorners(det_img, pattern_size, res[1], True)
 
         plt.figure(figsize=(9, 9))
         plt.imshow(det_img)

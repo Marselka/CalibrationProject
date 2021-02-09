@@ -2,19 +2,25 @@ import pcl
 
 
 def filter_pointclouds(pointclouds, lbound, ubound):
-    filtered_pcd = []
+    fpointclouds = {}
 
-    for pcd in pointclouds:
-        mask = (pcd[:, 2] < ubound) * (pcd[:, 2] > lbound)
-        filtered_pcd.append(pcd[mask, :])
+    lx, ly, lz = lbound
+    ux, uy, uz = ubound
 
-    return filtered_pcd
+    for key, pcd in pointclouds.items():
+        mask = (pcd[:, 0] < ux) * (pcd[:, 0] > lx) * \
+               (pcd[:, 1] < uy) * (pcd[:, 1] > ly) * \
+               (pcd[:, 2] < uz) * (pcd[:, 2] > lz)
+
+        fpointclouds[key] = pcd[mask, :]
+
+    return fpointclouds
 
 
 def segment_pointclouds(pointclouds, ksearch=50, distance_threshold=0.01, normal_distance_weight=0.01, max_iterations=100):
-    segmented_pcd = []
+    s_pointclouds = {}
 
-    for pcd in pointclouds:
+    for key, pcd in pointclouds.items():
         pcl_pcd = pcl.PointCloud(pcd)
 
         seg = pcl_pcd.make_segmenter_normals(ksearch)
@@ -27,6 +33,7 @@ def segment_pointclouds(pointclouds, ksearch=50, distance_threshold=0.01, normal
         indices, coefficients = seg.segment()
 
         if len(indices) != 0:
-            segmented_pcd.append(pcd[indices, :])
+            s_pointclouds[key] = pcd[indices, :]
 
-    return segmented_pcd
+    return s_pointclouds
+

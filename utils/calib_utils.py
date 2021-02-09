@@ -16,7 +16,7 @@ def detect_keypoints(images, pattern_size, edge_length=1.0):
 
     results = {}
 
-    for i, img in enumerate(images):
+    for key, img in images.items():
         if img.shape[-1] == 3:
             gray_img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
 
@@ -31,7 +31,7 @@ def detect_keypoints(images, pattern_size, edge_length=1.0):
         if success:
             loc_kp = cv.cornerSubPix(gray_img, kp, (11, 11), (-1, -1), criteria)
 
-            results[i] = (scene_points, loc_kp)
+            results[key] = (scene_points, loc_kp)
 
     return results
 
@@ -72,20 +72,30 @@ def check_neigh_consistency(results, pattern_size, const_thresh=3.0):
     return results
 
 
-def check_orientation(results, anchor_loc_kp, pattern_size, orient_thresh):
-    num_points = pattern_size[0] * pattern_size[1]
+def filter_by_orientation(results, pattern_size):
+    orient = {}
+    majority_orient = 0
 
-    orient_scene_points = []
-    orient_loc_kp = []
+    for key, (_, lkp) in results.items():
+        is_left = (lkp[0] - lkp[pattern_size[0]])[0, 0] < 0
 
-    for scene_points, loc_kp in results.values():
-        diff_norm = np.linalg.norm((loc_kp - anchor_loc_kp).reshape(num_points, 2), axis=-1)
+        orient[key] = is_left
+        majority_orient += float(is_left)
 
-        if (abs(diff_norm - diff_norm.mean())).mean() <= orient_thresh:
-            orient_scene_points.append(scene_points)
-            orient_loc_kp.append(loc_kp)
+    if majority_orient >= (len(results.keys()) // 2):
+        majority_orient = True
 
-    return orient_scene_points, orient_loc_kp
+    else:
+        majority_orient = False
+
+    f_results = {}
+
+    for key, r in results.items():
+
+        if orient[key] == majority_orient:
+            f_results[key] = r
+
+    return f_results
 
 
 def check_stereo_orientation(results0, results1, pattern_size, orient_thresh):
