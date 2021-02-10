@@ -15,32 +15,7 @@ def get_images(folder_path, period=None, file_name_list=None):
     :param period: the rate of considering images; used to reduce the final number of images
     :param file_name_list: the list of file names to consider; used to provide manually selected images
     """
-    file_names = sorted(os.listdir(folder_path), key=lambda s: s.lower())
-
-    images = {}
-
-    if file_name_list is None:
-        for i, fname in enumerate(file_names):
-            if period is not None and i % period != 0:
-                continue
-
-            fpath = os.path.join(folder_path, fname)
-
-            if fpath.lower().endswith('jpg') or \
-                    fpath.lower().endswith('jpeg') or \
-                    fpath.lower().endswith('png'):
-
-                img = cv.imread(fpath)
-                images[fname] = img
-
-    else:
-        for fname in file_name_list:
-            fpath = os.path.join(folder_path, fname)
-
-            img = cv.imread(fpath)
-            images[fname] = img
-
-    return images
+    return get_data(load_image, folder_path, period, file_name_list)
 
 
 def get_pointclouds(folder_path, period=None, file_name_list=None):
@@ -48,11 +23,29 @@ def get_pointclouds(folder_path, period=None, file_name_list=None):
     :param folder_path: path to the folder with pointclouds
     :param period: the rate of considering pointclouds
     :param file_name_list: the list of file names to consider
-    :return:
+    """
+    return get_data(load_pcd, folder_path, period, file_name_list)
+
+
+def get_depth(folder_path, period=None, file_name_list=None):
+    """
+    :param folder_path: path to the folder with pointclouds
+    :param period: the rate of considering pointclouds
+    :param file_name_list: the list of file names to consider
+    """
+    return get_data(load_depth, folder_path, period, file_name_list)
+
+
+def get_data(data_loader, folder_path, period, file_name_list):
+    """
+    :param data_loader: function for loading data
+    :param folder_path: folder to load data from
+    :param period: period to consider each i-th data sample
+    :param file_name_list: list of files to load
     """
     file_names = sorted(os.listdir(folder_path), key=lambda s: s.lower())
 
-    pointclouds = {}
+    data = {}
 
     if file_name_list is None:
         for i, fname in enumerate(file_names):
@@ -61,25 +54,21 @@ def get_pointclouds(folder_path, period=None, file_name_list=None):
 
             fpath = os.path.join(folder_path, fname)
 
-            if fpath.lower().endswith('pcd'):
+            datai = data_loader(fpath)
 
-                pcd = pcl.load(fpath).to_array()
-                nan_mask = np.isnan(pcd).prod(axis=-1) == 1
-                pcd = pcd[~nan_mask, :]
-
-                pointclouds[fname] = pcd
+            if datai is not None:
+                data[fname] = datai
 
     else:
         for fname in file_name_list:
             fpath = os.path.join(folder_path, fname)
 
-            pcd = pcl.load(fpath).to_array()
-            nan_mask = np.isnan(pcd).prod(axis=-1) == 1
-            pcd = pcd[~nan_mask, :]
+            datai = data_loader(fpath)
 
-            pointclouds[fname] = pcd
+            if datai is not None:
+                data[fname] = datai
 
-    return pointclouds
+    return data
 
 
 """
@@ -239,3 +228,43 @@ def draw_ep_lines(img, ep_line, loc_kp):
         img = cv.circle(img, tuple(lk[0]), 5, color, -1)
 
     return img
+
+
+"""
+Support utils
+"""
+
+
+def load_image(file_path):
+    if file_path.lower().endswith('jpg') or \
+            file_path.lower().endswith('jpeg') or \
+            file_path.lower().endswith('png'):
+        img = cv.imread(file_path)
+
+    else:
+        return None
+
+    return img
+
+
+def load_pcd(file_path):
+    if file_path.lower().endswith('pcd'):
+        pcd = pcl.load(file_path).to_array()
+
+    else:
+        return None
+
+    nan_mask = np.isnan(pcd).prod(axis=-1) == 1
+    pcd = pcd[~nan_mask, :]
+
+    return pcd
+
+
+def load_depth(file_path):
+    if file_path.lower().endswith('npy'):
+        pcd = np.load(file_path)
+
+    else:
+        return None
+
+    return pcd
