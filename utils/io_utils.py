@@ -76,7 +76,7 @@ Functions for writing the data and providing visualizations
 """
 
 
-def output_calib_results(intrinsics, dist_coeff, shape, images, idx, cam_id=None):
+def output_calib_results(intrinsics, dist_coeff, shape, images, idx, calib_name=None):
     print("Intrinsics:")
     print(intrinsics)
 
@@ -93,8 +93,8 @@ def output_calib_results(intrinsics, dist_coeff, shape, images, idx, cam_id=None
     plt.figure(figsize=(9, 9))
     plt.imshow(undist_img)
 
-    if cam_id is not None:
-        calib_fpath = 'calib_output/%s_intrinsics' % cam_id
+    if calib_name is not None:
+        calib_fpath = 'calib_output/%s_intrinsics' % calib_name
         calib = {'intrinsics': intrinsics,
                  'dist_coeff': dist_coeff,
                  'undist_intrinsics': undist_intrinsics}
@@ -104,8 +104,8 @@ def output_calib_results(intrinsics, dist_coeff, shape, images, idx, cam_id=None
         print('Saved calibration results as %s.npy' % calib_fpath)
 
 
-def output_stereo_calib_results(R, T, E, F, cam0_images, cam1_images, results0, results1, pattern_size, idx,
-                                stereo_id=None):
+def output_stereo_calib_results(R, T, E, F, images1, images2, results1, results2, pattern_size, idx, pair_dict,
+                                calib_name=None):
     print("R:")
     print(R)
 
@@ -120,23 +120,26 @@ def output_stereo_calib_results(R, T, E, F, cam0_images, cam1_images, results0, 
 
     num_points = pattern_size[0] * pattern_size[1]
 
-    loc_kp0 = results0.get(idx)[1]
-    loc_kp1 = results1.get(idx)[1]
+    key1 = list(images1.keys())[idx]
+    key2 = pair_dict[key1]
 
-    fig, axes = plt.subplots(2, 2, figsize=(18, 12))
+    res1 = results1.get(key1)
+    res2 = results2.get(key2)
 
-    if loc_kp0 is not None and loc_kp1 is not None:
-        loc_kp0 = loc_kp0.reshape(num_points, 1, 2)
-        loc_kp1 = loc_kp1.reshape(num_points, 1, 2)
+    if res1 is not None and res2 is not None:
+        fig, axes = plt.subplots(2, 2, figsize=(18, 12))
 
-        ep_lines0 = cv.computeCorrespondEpilines(loc_kp1, 2, F).reshape(-1, 3)
-        ep_lines1 = cv.computeCorrespondEpilines(loc_kp0, 1, F).reshape(-1, 3)
+        loc_kp1 = res1[1].reshape(num_points, 1, 2)
+        loc_kp2 = res2[1].reshape(num_points, 1, 2)
 
-        ep_img0 = draw_ep_lines(np.copy(cam0_images[idx]), ep_lines0, loc_kp0)
-        det_img1 = cv.drawChessboardCorners(np.copy(cam1_images[idx]), pattern_size, loc_kp1, True)
+        ep_lines0 = cv.computeCorrespondEpilines(loc_kp2, 2, F).reshape(-1, 3)
+        ep_lines1 = cv.computeCorrespondEpilines(loc_kp1, 1, F).reshape(-1, 3)
 
-        det_img0 = cv.drawChessboardCorners(np.copy(cam0_images[idx]), pattern_size, loc_kp0, True)
-        ep_img1 = draw_ep_lines(np.copy(cam1_images[idx]), ep_lines1, loc_kp1)
+        ep_img0 = draw_ep_lines(np.copy(images1[key1]), ep_lines0, loc_kp1)
+        det_img1 = cv.drawChessboardCorners(np.copy(images2[key2]), pattern_size, loc_kp2, True)
+
+        det_img0 = cv.drawChessboardCorners(np.copy(images1[key1]), pattern_size, loc_kp1, True)
+        ep_img1 = draw_ep_lines(np.copy(images2[key2]), ep_lines1, loc_kp2)
 
         axes[0][0].imshow(ep_img0)
         axes[0][1].imshow(det_img1)
@@ -145,16 +148,10 @@ def output_stereo_calib_results(R, T, E, F, cam0_images, cam1_images, results0, 
         axes[1][1].imshow(ep_img1)
 
     else:
-        print("The pair doesn't have matching detections detections")
+        print("The pair doesn't have matching detections")
 
-        axes[0][0].imshow(cam0_images[idx])
-        axes[0][1].imshow(cam0_images[idx])
-
-        axes[1][0].imshow(cam1_images[idx])
-        axes[1][1].imshow(cam1_images[idx])
-
-    if stereo_id is not None:
-        calib_fpath = 'calib_%s_extrinsics' % stereo_id
+    if calib_name is not None:
+        calib_fpath = 'calib_output/%s_extrinsics' % calib_name
         calib = {'R': R,
                  'T': T,
                  'E': E,
@@ -189,45 +186,41 @@ def draw_detections(images, results, pattern_size, idx, normalize=False):
         print("No detections")
 
 
-def draw_stereo_pair(cam0_images, cam1_images, idx):
-    fig, axes = plt.subplots(1, 2, figsize=(18, 7))
-    axes[0].imshow(cam0_images[idx])
-    axes[1].imshow(cam1_images[idx])
+def draw_stereo_pair(images1, images2, idx, pair_dict):
+    key1 = list(images1.keys())[idx]
+    key2 = pair_dict[key1]
 
+    img1 = images1.get(key1)
+    img2 = images2.get(key2)
 
-def draw_stereo_pair_detections(cam0_images, cam1_images, results0, results1, pattern_size, idx):
-    fig, axes = plt.subplots(1, 2, figsize=(18, 7))
+    if img1 is not None and img2 is not None:
+        fig, axes = plt.subplots(1, 2, figsize=(18, 7))
 
-    loc_kp0 = results0.get(idx)[1]
-    loc_kp1 = results1.get(idx)[1]
-
-    if loc_kp0 is not None and loc_kp1 is not None:
-        det_img0 = cv.drawChessboardCorners(np.copy(cam0_images[idx]), pattern_size, loc_kp0, True)
-        det_img1 = cv.drawChessboardCorners(np.copy(cam1_images[idx]), pattern_size, loc_kp1, True)
-
-        axes[0].imshow(det_img0)
-        axes[1].imshow(det_img1)
+        axes[0].imshow(img1)
+        axes[1].imshow(img2)
 
     else:
-        print("The pair doesn't have matching detections detections")
-
-        axes[0].imshow(cam0_images[idx])
-        axes[1].imshow(cam1_images[idx])
+        print("Stereo pair doesn't exist")
 
 
-def draw_ep_lines(img, ep_line, loc_kp):
-    c = img.shape[1]
+def draw_stereo_pair_detections(images1, images2, results1, results2, pattern_size, idx, pair_dict):
+    key1 = list(images1.keys())[idx]
+    key2 = pair_dict[key1]
 
-    for l, lk in zip(ep_line, loc_kp):
-        color = tuple(np.random.randint(0, 255, 3).tolist())
+    res1 = results1.get(key1)
+    res2 = results2.get(key2)
 
-        x0, y0 = map(int, [0, -l[2] / l[1]])
-        x1, y1 = map(int, [c, -(l[2] + l[0] * c) / l[1]])
+    if res1 is not None and res2 is not None:
+        fig, axes = plt.subplots(1, 2, figsize=(18, 7))
 
-        img = cv.line(img, (x0, y0), (x1, y1), color, 1, lineType=cv.LINE_AA)
-        img = cv.circle(img, tuple(lk[0]), 5, color, -1)
+        det_img1 = cv.drawChessboardCorners(np.copy(images1.get(key1)), pattern_size, res1[1], True)
+        det_img2 = cv.drawChessboardCorners(np.copy(images2.get(key2)), pattern_size, res2[1], True)
 
-    return img
+        axes[0].imshow(det_img1)
+        axes[1].imshow(det_img2)
+
+    else:
+        print("The pair doesn't have matching detections")
 
 
 """
@@ -268,3 +261,18 @@ def load_depth(file_path):
         return None
 
     return pcd
+
+
+def draw_ep_lines(img, ep_line, loc_kp):
+    c = img.shape[1]
+
+    for l, lk in zip(ep_line, loc_kp):
+        color = tuple(np.random.randint(0, 255, 3).tolist())
+
+        x0, y0 = map(int, [0, -l[2] / l[1]])
+        x1, y1 = map(int, [c, -(l[2] + l[0] * c) / l[1]])
+
+        img = cv.line(img, (x0, y0), (x1, y1), color, 1, lineType=cv.LINE_AA)
+        img = cv.circle(img, tuple(lk[0]), 5, color, -1)
+
+    return img
