@@ -71,6 +71,37 @@ def get_data(data_loader, folder_path, period, file_name_list):
     return data
 
 
+def pointcloudify_depths(depths, intrinsics, dist_coeff):
+    pointclouds = {}
+
+    shape = list(depths.values())[0].shape[::-1]
+
+    # Calculate undistorted intrinsics
+    undist_intrinsics, _ = cv.getOptimalNewCameraMatrix(intrinsics, dist_coeff, shape, 1, shape)
+    inv_undist_intrinsics = np.linalg.inv(undist_intrinsics)
+
+    for key, depthi in depths.items():
+        # Undistort depth
+        undist_depthi = cv.undistort(depthi, intrinsics, dist_coeff, None, undist_intrinsics)
+
+        # Generate x,y grid for H x W image
+        grid_x, grid_y = np.meshgrid(np.arange(shape[0]), np.arange(shape[1]))
+        grid = np.concatenate([np.expand_dims(grid_x, -1),
+                               np.expand_dims(grid_y, -1)], axis=-1)
+
+        grid = np.concatenate([grid, np.ones((shape[1], shape[0], 1))], axis=-1)
+
+        # To normalized image coordinates
+        local_grid = inv_undist_intrinsics @ grid.reshape(-1, 3).transpose()  # 3 x H * W
+
+        # Raise by undistorted depth value from image plane to local camera space
+        local_grid = local_grid.transpose() * np.expand_dims(undist_depthi.reshape(-1), axis=-1)
+
+        pointclouds[key] = local_grid
+
+    return pointclouds
+
+
 """
 Functions for writing the data and providing visualizations
 """

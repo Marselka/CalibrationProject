@@ -57,7 +57,7 @@ def filter_orientation_stereo(results1, results2, pattern_size, pair_dict):
     return fresults1, fresults2
 
 
-def get_calib_input(fresults1, fresults2, pair_dict):
+def get_stereo_calib_input(fresults1, fresults2, pair_dict):
     scene_points = []
     loc_kp1 = []
     loc_kp2 = []
@@ -71,6 +71,17 @@ def get_calib_input(fresults1, fresults2, pair_dict):
         loc_kp2.append(r2[1])
 
     return scene_points, loc_kp1, loc_kp2
+
+
+def get_calib_input(results):
+    scene_points = []
+    loc_kp = []
+
+    for key1, r1 in results.items():
+        scene_points.append(r1[0])
+        loc_kp.append(r1[1])
+
+    return scene_points, loc_kp
 
 
 # def filter_by_orientation(results, pattern_size):
