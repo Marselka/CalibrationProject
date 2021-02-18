@@ -71,18 +71,25 @@ def get_data(data_loader, folder_path, period, file_name_list):
     return data
 
 
-def pointcloudify_depths(depths, intrinsics, dist_coeff):
+def pointcloudify_depths(depths, intrinsics, dist_coeff, undistort=True):
     pointclouds = {}
 
     shape = list(depths.values())[0].shape[::-1]
 
     # Calculate undistorted intrinsics
-    undist_intrinsics, _ = cv.getOptimalNewCameraMatrix(intrinsics, dist_coeff, shape, 1, shape)
-    inv_undist_intrinsics = np.linalg.inv(undist_intrinsics)
+    if undistort:
+        undist_intrinsics, _ = cv.getOptimalNewCameraMatrix(intrinsics, dist_coeff, shape, 1, shape)
+        inv_undist_intrinsics = np.linalg.inv(undist_intrinsics)
+
+    else:
+        inv_undist_intrinsics = np.linalg.inv(intrinsics)
 
     for key, depthi in depths.items():
         # Undistort depth
-        undist_depthi = cv.undistort(depthi, intrinsics, dist_coeff, None, undist_intrinsics)
+        if undistort:
+            # undist_depthi = cv.undistort(depthi, intrinsics, dist_coeff, None, undist_intrinsics)
+            map_x, map_y = cv.initUndistortRectifyMap(intrinsics, dist_coeff, None, undist_intrinsics, shape, cv.CV_32FC1)
+            undist_depthi = cv.remap(depthi, map_x, map_y, cv.INTER_NEAREST)
 
         # Generate x,y grid for H x W image
         grid_x, grid_y = np.meshgrid(np.arange(shape[0]), np.arange(shape[1]))
@@ -95,7 +102,11 @@ def pointcloudify_depths(depths, intrinsics, dist_coeff):
         local_grid = inv_undist_intrinsics @ grid.reshape(-1, 3).transpose()  # 3 x H * W
 
         # Raise by undistorted depth value from image plane to local camera space
-        local_grid = local_grid.transpose() * np.expand_dims(undist_depthi.reshape(-1), axis=-1)
+        if undistort:
+            local_grid = local_grid.transpose() * np.expand_dims(undist_depthi.reshape(-1), axis=-1)
+
+        else:
+            local_grid = local_grid.transpose() * np.expand_dims(depthi.reshape(-1), axis=-1)
 
         pointclouds[key] = local_grid
 
