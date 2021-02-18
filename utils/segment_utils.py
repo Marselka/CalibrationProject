@@ -1,6 +1,6 @@
 import pcl
-import cv2 as cv
 import numpy as np
+from sklearn.cluster import DBSCAN
 
 
 def filter_pointclouds(pointclouds, lbound, ubound):
@@ -19,7 +19,9 @@ def filter_pointclouds(pointclouds, lbound, ubound):
     return fpointclouds
 
 
-def segment_pointclouds(pointclouds, ksearch=50, distance_threshold=0.01, normal_distance_weight=0.01, max_iterations=100):
+def segment_pointclouds(pointclouds,
+                        ksearch=50, distance_threshold=0.01, normal_distance_weight=0.01, max_iterations=100,
+                        eps=0.1, min_samples=5):
     s_pointclouds = {}
 
     for key, pcd in pointclouds.items():
@@ -35,7 +37,12 @@ def segment_pointclouds(pointclouds, ksearch=50, distance_threshold=0.01, normal
         indices, coefficients = seg.segment()
 
         if len(indices) != 0:
-            s_pointclouds[key] = pcd[indices, :]
+            pcd = pcd[indices, :]
+
+            dbscan = DBSCAN(eps=eps, min_samples=min_samples).fit(pcd)
+            plane_mask = (dbscan.labels_ == np.argmax(np.unique(dbscan.labels_, return_counts=True)[1]))
+
+            s_pointclouds[key] = pcd[plane_mask, :]
 
     return s_pointclouds
 

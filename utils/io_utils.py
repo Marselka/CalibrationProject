@@ -9,37 +9,40 @@ Functions for reading the data
 """
 
 
-def get_images(folder_path, period=None, file_name_list=None):
+def get_images(folder_path, start=None, period=None, file_name_list=None):
     """
     :param folder_path: path to the folder with images
     :param period: the rate of considering images; used to reduce the final number of images
     :param file_name_list: the list of file names to consider; used to provide manually selected images
     """
-    return get_data(load_image, folder_path, period, file_name_list)
+    return get_data(load_image, folder_path, start, period, file_name_list)
 
 
-def get_pointclouds(folder_path, period=None, file_name_list=None):
+def get_pointclouds(folder_path, start=None, period=None, file_name_list=None):
     """
     :param folder_path: path to the folder with pointclouds
+    :param start: pointcloud to start from
     :param period: the rate of considering pointclouds
     :param file_name_list: the list of file names to consider
     """
-    return get_data(load_pcd, folder_path, period, file_name_list)
+    return get_data(load_pcd, folder_path, start, period, file_name_list)
 
 
-def get_depth(folder_path, period=None, file_name_list=None):
+def get_depth(folder_path, start=None, period=None, file_name_list=None):
     """
-    :param folder_path: path to the folder with pointclouds
-    :param period: the rate of considering pointclouds
+    :param folder_path: path to the folder with depths
+    :param start: depth to start from
+    :param period: the rate of considering depths
     :param file_name_list: the list of file names to consider
     """
-    return get_data(load_depth, folder_path, period, file_name_list)
+    return get_data(load_depth, folder_path, start, period, file_name_list)
 
 
-def get_data(data_loader, folder_path, period, file_name_list):
+def get_data(data_loader, folder_path, start, period, file_name_list):
     """
     :param data_loader: function for loading data
     :param folder_path: folder to load data from
+    :param start: the position from which to start reading data
     :param period: period to consider each i-th data sample
     :param file_name_list: list of files to load
     """
@@ -49,6 +52,9 @@ def get_data(data_loader, folder_path, period, file_name_list):
 
     if file_name_list is None:
         for i, fname in enumerate(file_names):
+            if start is not None and i < start:
+                continue
+
             if period is not None and i % period != 0:
                 continue
 
@@ -108,7 +114,7 @@ def pointcloudify_depths(depths, intrinsics, dist_coeff, undistort=True):
         else:
             local_grid = local_grid.transpose() * np.expand_dims(depthi.reshape(-1), axis=-1)
 
-        pointclouds[key] = local_grid
+        pointclouds[key] = local_grid.astype(np.float32)
 
     return pointclouds
 
