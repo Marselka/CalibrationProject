@@ -1,5 +1,5 @@
 import os
-import pcl
+import open3d
 import cv2 as cv
 import numpy as np
 import matplotlib.pyplot as plt
@@ -290,13 +290,10 @@ def load_image(file_path):
 
 def load_pcd(file_path):
     if file_path.lower().endswith('pcd'):
-        pcd = pcl.load(file_path).to_array()
+        pcd = np.asarray(open3d.io.read_point_cloud(file_path).points).astype(np.float32)
 
     else:
         return None
-
-    nan_mask = np.isnan(pcd).prod(axis=-1) == 1
-    pcd = pcd[~nan_mask, :]
 
     return pcd
 

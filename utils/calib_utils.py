@@ -36,25 +36,49 @@ def detect_keypoints(images, pattern_size, edge_length=1.0):
     return results
 
 
-def filter_orientation_stereo(results1, results2, pattern_size, pair_dict):
-    fresults1 = {}
-    fresults2 = {}
+def filter_orientation(results1, pattern_size):
+    fresults = {}
 
-    for key1, r1 in results1.items():
-        key2 = pair_dict[key1]
-        r2 = results2[key2]
+    keys = list(results1.keys())
+    anchor_kp = results1[keys[0]][1]
 
-        loc_kp1 = r1[1]
-        loc_kp2 = r2[1]
+    anchor_is_bottom = (anchor_kp[pattern_size[0]] - anchor_kp[0])[0, 1] > 0
+    anchor_is_right = (anchor_kp[1] - anchor_kp[0])[0, 0] > 0
 
-        is_left1 = (loc_kp1[0] - loc_kp1[pattern_size[0]])[0, 0] < 0
-        is_left2 = (loc_kp2[0] - loc_kp2[pattern_size[0]])[0, 0] < 0
+    for k in keys[1:]:
+        r = results1[k]
+        sp, loc_kp = r[0], r[1]
 
-        if is_left1 == is_left2:
-            fresults1[key1] = r1
-            fresults2[key2] = r2
+        is_bottom = (loc_kp[pattern_size[0]] - loc_kp[0])[0, 1] > 0
+        is_right = (loc_kp[1] - loc_kp[0])[0, 0] > 0
+
+        if anchor_is_bottom != is_bottom:
+            sp = np.flip(sp, axis=0)
+
+        if anchor_is_right != is_right:
+            sp = np.flip(sp, axis=1)
+
+        fresults[k] = (sp, loc_kp)
+
+    return fresults
+
+
+def filter_orientation_stereo(results1, results2, pattern_size):
+    fresults1 = filter_orientation(results1, pattern_size)
+    fresults2 = filter_orientation(results2, pattern_size)
 
     return fresults1, fresults2
+
+
+def get_calib_input(results):
+    scene_points = []
+    loc_kp = []
+
+    for key1, r1 in results.items():
+        scene_points.append(r1[0])
+        loc_kp.append(r1[1])
+
+    return scene_points, loc_kp
 
 
 def get_stereo_calib_input(fresults1, fresults2, pair_dict):
@@ -71,71 +95,6 @@ def get_stereo_calib_input(fresults1, fresults2, pair_dict):
         loc_kp2.append(r2[1])
 
     return scene_points, loc_kp1, loc_kp2
-
-
-def get_calib_input(results):
-    scene_points = []
-    loc_kp = []
-
-    for key1, r1 in results.items():
-        scene_points.append(r1[0])
-        loc_kp.append(r1[1])
-
-    return scene_points, loc_kp
-
-
-# def filter_by_orientation(results, pattern_size):
-#     orient = {}
-#     majority_orient = 0
-#
-#     if majority_orient is None:
-#         for key, (_, lkp) in results.items():
-#             is_left = (lkp[0] - lkp[pattern_size[0]])[0, 0] < 0
-#
-#             orient[key] = is_left
-#             majority_orient += float(is_left)
-#
-#         if majority_orient >= (len(results.keys()) // 2):
-#             majority_orient = True
-#
-#         else:
-#             majority_orient = False
-#
-#     f_results = {}
-#
-#     for key, r in results.items():
-#
-#         if orient[key] == majority_orient:
-#             f_results[key] = r
-#
-#     return f_results, majority_orient
-
-
-# def check_stereo_orientation(results0, results1, pattern_size, orient_thresh):
-#     """
-#     The function assumes that cam0 and cam1 image pairs are aligned within a certain small latency (e.g. 25 ms).
-#     """
-#     keys = results0.keys()
-#
-#     num_points = pattern_size[0] * pattern_size[1]
-#
-#     orient_scene_points = []
-#     orient_loc_kp0 = []
-#     orient_loc_kp1 = []
-#
-#     for k in keys:
-#         r0, r1 = results0.get(k), results1.get(k)
-#
-#         if r0 is not None and r1 is not None:
-#             # Check that the orientation of detected keypoints is similar by measuring distance variance
-#             diff_norm = np.linalg.norm((r0[1] - r1[1]).reshape(num_points, 2), axis=-1)
-#
-#             if (abs(diff_norm - diff_norm.mean())).mean() <= orient_thresh:
-#                 orient_scene_points.append(r0[0])
-#                 orient_loc_kp0.append(r0[1])
-#                 orient_loc_kp1.append(r1[1])
-#
-#     return orient_scene_points, orient_loc_kp0, orient_loc_kp1
 
 
 # def check_neigh_consistency(results, pattern_size, const_thresh=3.0):
