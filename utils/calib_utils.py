@@ -89,6 +89,132 @@ def pointcloudify_depths(depths, undist_intrinsics):
     return pcd_depths
 
 
+def plane2plane_transformation(plane_points1, plane_points2):
+    """
+    :param plane_points1: N x 3
+    :param plane_points2: N x 3
+    """
+    centroid1, centroid2 = plane_points1.mean(axis=0), plane_points2.mean(axis=0)
+
+    plane_points1 = plane_points1 - centroid1.reshape(1, 3)
+    plane_points2 = plane_points2 - centroid2.reshape(1, 3)
+
+    H = plane_points2.T.dot(plane_points1).T
+
+    u, d, vt = svd(H, full_matrices=False)
+
+    # If a singular value is close to zero then the general solution will not hold
+    num_sing = sum(d < 1e-10)
+    if num_sing == 1:
+        w, v = np.linalg.eig(H.T @ H)
+
+        sing_mask = w > 1e-10
+        s = sum([np.outer(vi, vi) / np.sqrt(wi) for wi, vi in zip(w[sing_mask], v[:, sing_mask].T)])
+        s3 = np.outer(v[~sing_mask], v[~sing_mask])
+
+        R = H.T @ s + s3
+
+        if np.linalg.det(R) < 0:
+            R = H.T @ s - s3
+
+    elif num_sing == 0:
+        R = u @ vt
+    else:
+        raise RuntimeError
+
+    T = np.zeros((4, 4))
+    T[:3, :3] = R
+    T[:3, 3] = centroid2 - R @ centroid1
+    T[3, 3] = 1
+
+    return T
+
+
+def compose_fund_mat(T, K1, K2):
+    E = compose_ess_mat(T)
+
+    iK1, iK2 = np.linalg.inv(K1), np.linalg.inv(K2)
+
+    return iK2.T @ E @ iK1
+
+
+def optimize_pose_lm(T, kp1, kp2, K1, K2, batch=False):
+    """
+    :param T: 4 x 4
+    :param kp1: list of N x 2 or N x 2
+    :param kp2: list of N x 2 or N x 2
+    :param K1: list of 3 x 3 or 3 x 3
+    :param K2: list of 3 x 3 or 3 x 3
+    """
+    T = T.copy()
+    dist = np.linalg.norm(T[:3, 3])
+    T[:3, 3] /= dist
+
+    x = encode_essmat(T)
+
+    if batch:
+        iK1 = [np.linalg.inv(k1i) for k1i in K1]
+        iK2 = [np.linalg.inv(k2i) for k2i in K2]
+
+        lm_opt = least_squares(loss_fun_pose_batch, x, jac=loss_fun_pose_jac_batch, args=(kp1, kp2, iK1, iK2), method='lm')
+
+    else:
+        iK1 = np.linalg.inv(K1)
+        iK2 = np.linalg.inv(K2)
+
+        lm_opt = least_squares(loss_fun_pose, x, jac=loss_fun_pose_jac, args=(kp1, kp2, iK1, iK2), method='lm')
+
+    if lm_opt.success:
+        avg_res = np.abs(lm_opt.fun).mean()
+        print("Avg. epipolar distance:", avg_res)
+        print("Number of iters:", lm_opt.nfev)
+
+        T = np.zeros((4, 4))
+        T[:3, :3] = cv.Rodrigues(lm_opt.x[:3])[0]
+
+        t = np.zeros(3)
+        t[0:2] = lm_opt.x[3:]
+        t = cv.Rodrigues(t)[0][:, 2]
+        T[:3, 3] = t * dist
+
+        T[3, 3] = 1
+
+        return T
+
+    else:
+        return None
+
+
+def optimize_translation_lm(T, local_kp1, kp2, K2, batch=False):
+    m = 1
+
+    if batch:
+        lm_opt = least_squares(loss_fun_tr_batch, m, args=(T, local_kp1, kp2, K2), method='lm')
+
+    else:
+        lm_opt = least_squares(loss_fun_tr, m, args=(T, local_kp1, kp2, K2), method='lm')
+
+    if lm_opt.success:
+        avg_norm = np.abs(lm_opt.fun).mean()
+
+        print("Avg. l2-norm:", avg_norm)
+        print("Number of iters:", lm_opt.nfev)
+        print("Translation scale:", lm_opt.x[0])
+
+        T = np.copy(T)
+        T[:3, 3] = lm_opt.x[0] * T[:3, 3]
+
+        return T, avg_norm
+
+    else:
+        return None
+
+
+"""
+Utils
+"""
+
+
 def to_norm_image_coord(loc_kp, intrinsics):
     """
     :param loc_kp: N x 2
@@ -116,97 +242,6 @@ def transform2local(loc_kp, norm_loc_kp, depth):
     local_loc_kp = norm_loc_kp * np.expand_dims(loc_kp_depth.reshape(-1), axis=-1)
 
     return local_loc_kp
-
-
-def plane2plane_transformation(plane_points1, plane_points2):
-    """
-    :param plane_points1: N x 3
-    :param plane_points2: N x 3
-    """
-    centroid1, centroid2 = plane_points1.mean(axis=0), plane_points2.mean(axis=0)
-
-    plane_points1 = plane_points1 - centroid1.reshape(1, 3)
-    plane_points2 = plane_points2 - centroid2.reshape(1, 3)
-
-    H = plane_points2.T.dot(plane_points1).T
-    u, d, vt = svd(H, full_matrices=False)
-
-    # If a singular value is close to zero then the general solution will not hold
-    num_sing = sum(d < 1e-10)
-    if num_sing == 1:
-        w, v = np.linalg.eig(H.T @ H)
-
-        sing_mask = w > 1e-10
-        s = sum([np.outer(vi, vi) / np.sqrt(wi) for wi, vi in zip(w[sing_mask], v[:, sing_mask].T)])
-        s3 = np.outer(v[~sing_mask], v[~sing_mask])
-
-        R = H.T @ s + s3
-
-        if np.linalg.det(R) < 0:
-            R = H.T @ s - s3
-
-    elif num_sing == 0:
-        R = u @ vt
-
-    else:
-        raise RuntimeError
-
-    T = np.zeros((4, 4))
-    T[:3, :3] = R
-    T[:3, 3] = centroid2 - R @ centroid1
-    T[3, 3] = 1
-
-    return T
-
-
-def compose_fund_mat(T, K1, K2):
-    E = compose_ess_mat(T)
-
-    iK1, iK2 = np.linalg.inv(K1), np.linalg.inv(K2)
-
-    return iK2.T @ E @ iK1
-
-
-def optimize_pose_lm(T, loc_kp1, loc_kp2, K1, K2):
-    """
-    :param T: 4 x 4
-    :param loc_kp1: N x 2
-    :param loc_kp2: N x 2
-    :param K1: 3 x 3
-    :param K2: 3 x 3
-    """
-    T = T.copy()
-    dist = np.linalg.norm(T[:3, 3])
-    T[:3, 3] /= dist
-
-    x = encode_essmat(T)
-
-    iK1, iK2 = np.linalg.inv(K1), np.linalg.inv(K2)
-
-    lm_opt = least_squares(loss_fun, x, jac=loss_fun_jac, args=(loc_kp1, loc_kp2, iK1, iK2), method='lm')
-
-    if lm_opt.success:
-        print("Avg. epipolar distance: ", lm_opt.cost)
-
-        T = np.zeros((4, 4))
-        T[:3, :3] = cv.Rodrigues(lm_opt.x[:3])[0]
-
-        t = np.zeros(3)
-        t[0:2] = lm_opt.x[3:]
-        t = cv.Rodrigues(t)[0][:, 2]
-        T[:3, 3] = t * dist
-
-        T[3, 3] = 1
-
-        return T
-
-    else:
-        return None
-
-
-"""
-Utils
-"""
 
 
 def interpolate(grid_values, points):
@@ -240,14 +275,61 @@ def compose_ess_mat(T):
     return E
 
 
-def loss_fun(x, kp1, kp2, iK1, iK2):
+def loss_fun_tr_batch(m, T, local_kp1, loc_kp2, K2):
+    T = np.copy(T)
+    T[:3, 3] = m * T[:3, 3]
+
+    norm_diff_batch = []
+
+    for local_kp1i, loc_kp2i, K2i in zip(local_kp1, loc_kp2, K2):
+        t_local_kp1i = to_cartesian((T @ to_homogeneous(local_kp1i).transpose()).transpose())
+        p_local_kp1i = project2image(t_local_kp1i, K2i)
+
+        norm_diff = np.linalg.norm(p_local_kp1i - loc_kp2i, axis=-1).reshape(-1)
+
+        norm_diff_batch.append(norm_diff)
+
+    return np.concatenate(norm_diff_batch, axis=0)
+
+
+def loss_fun_tr(m, T, local_kp1, loc_kp2, K2):
+    T = np.copy(T)
+    T[:3, 3] = m * T[:3, 3]
+
+    t_local_kp1 = to_cartesian((T @ to_homogeneous(local_kp1).transpose()).transpose())
+    p_local_kp1 = project2image(t_local_kp1, K2)
+
+    norm_diff = np.linalg.norm(p_local_kp1 - loc_kp2, axis=-1).reshape(-1)
+
+    return norm_diff
+
+
+def loss_fun_pose_batch(x, kp1, kp2, iK1, iK2):
+    errs_batch = []
+
+    for kp1i, kp2i, ik1i, ik2i in zip(kp1, kp2, iK1, iK2):
+        errs_batch.append(loss_fun_pose(x, kp1i, kp2i, ik1i, ik2i))
+
+    return np.concatenate(errs_batch, axis=0)
+
+
+def loss_fun_pose_jac_batch(x, kp1, kp2, iK1, iK2):
+    dres_batch = []
+
+    for kp1i, kp2i, ik1i, ik2i in zip(kp1, kp2, iK1, iK2):
+        dres_batch.append(loss_fun_pose_jac(x, kp1i, kp2i, ik1i, ik2i))
+
+    return np.concatenate(dres_batch, axis=0)
+
+
+def loss_fun_pose(x, kp1, kp2, iK1, iK2):
     E = decode_essmat(x)
     F = iK2.T @ E @ iK1
     errs, errs_rev = compute_epipolar_errors_opt(F, kp1, kp2)
     return np.concatenate([errs, errs_rev], axis=0)
 
 
-def loss_fun_jac(x, kp1, kp2, iK1, iK2):
+def loss_fun_pose_jac(x, kp1, kp2, iK1, iK2):
     E, dE = decode_essmat(x, True)
     F = iK2.T @ E @ iK1
     dF = np.matmul(iK2.T.reshape(1, 3, 3), np.matmul(dE, iK1.reshape(1, 3, 3)))
@@ -386,4 +468,3 @@ def rotate_a_b_axis_angle(a, b):
 
     aa = rot_axis / np.clip(np.linalg.norm(rot_axis), a_min=1e-16, a_max=None) * theta
     return aa
-
