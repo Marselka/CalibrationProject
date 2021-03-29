@@ -165,8 +165,8 @@ def optimize_pose_lm(T, kp1, kp2, K1, K2, batch=False):
         lm_opt = least_squares(loss_fun_pose, x, jac=loss_fun_pose_jac, args=(kp1, kp2, iK1, iK2), method='lm')
 
     if lm_opt.success:
-        avg_res = np.abs(lm_opt.fun).mean()
-        print("Avg. epipolar distance:", avg_res)
+        avg_ep_dist = np.abs(lm_opt.fun).mean()
+        print("Avg. epipolar distance:", avg_ep_dist)
         print("Number of iters:", lm_opt.nfev)
 
         T = np.zeros((4, 4))
