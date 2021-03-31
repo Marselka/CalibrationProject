@@ -1,6 +1,7 @@
 import cv2 as cv
 import numpy as np
 import open3d
+from scipy.signal import convolve2d
 import matplotlib.pyplot as plt
 
 from utils.calib_utils import project2image
@@ -56,7 +57,8 @@ def plot_projected_pcd(image, local_scene_points, undist_intrinsics, key, fig_si
     proj_pcd = proj_pcd[proj_mask, :]
     d = d[proj_mask]
 
-    pcd_image[proj_pcd[:, 1], proj_pcd[:, 0], 0] = 2 / d
+    pcd_image[proj_pcd[:, 1], proj_pcd[:, 0], 0] = 1 / d
+    pcd_image[:, :, 0] = convolve2d(pcd_image[:, :, 0], np.ones((3, 3)), mode='same')
 
     plt.figure(figsize=fig_size)
     plt.title(key)
