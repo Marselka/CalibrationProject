@@ -1,7 +1,7 @@
 import os
 import re
 import open3d
-import cv2 as cv
+import matplotlib.pyplot as plt
 import numpy as np
 
 
@@ -29,7 +29,7 @@ Functions for reading the data
 """
 
 
-def get_images(folder_path, start=None, period=None, file_name_list=None):
+def get_images(folder_path, start=None, period=None, file_name_list=None, is_inverted=False):
     """
     :param folder_path: path to the folder with images
     :param period: the rate of considering images; used to reduce the final number of images
@@ -48,7 +48,7 @@ def get_pointclouds(folder_path, start=None, period=None, file_name_list=None):
     return get_data(load_pcd, folder_path, start, period, file_name_list)
 
 
-def get_depths(folder_path, start=None, period=None, file_name_list=None):
+def get_depths(folder_path, start=None, period=None, file_name_list=None, is_inverted=False):
     """
     :param folder_path: path to the folder with depths
     :param start: depth to start from
@@ -134,7 +134,15 @@ def load_image(file_path):
     if file_path.lower().endswith('jpg') or \
             file_path.lower().endswith('jpeg') or \
             file_path.lower().endswith('png'):
-        img = cv.imread(file_path)
+
+        img = plt.imread(file_path)
+
+        if len(img.shape) == 3 and img.dtype == np.float32 and img.max() <= 1:
+            img = (img * 255).astype(np.uint8)
+
+        # Infra-red image
+        if len(img.shape) == 2 and img.dtype == np.float32 and img.max() <= 1:
+            img = (img / img.max() * 255).astype(np.uint8)
 
     else:
         return None

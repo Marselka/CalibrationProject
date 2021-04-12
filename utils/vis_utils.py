@@ -31,19 +31,16 @@ def plot_figures(figures, nrows=1, ncols=1, size=(18, 18)):
     plt.tight_layout()  # optional
 
 
-def plot_projected_keypoints(image, local_scene_points, undist_intrinsics, key, pattern_size, fig_size=(9, 9), normalize=False):
+def plot_projected_keypoints(image, local_scene_points, undist_intrinsics, key, pattern_size, fig_size=(9, 9)):
     proj_image_points = project2image(local_scene_points, undist_intrinsics)
-    corners_image = draw_chessboard_corners(image, np.expand_dims(proj_image_points.astype(np.float32), 1), pattern_size, normalize)
+    corners_image = draw_chessboard_corners(image, np.expand_dims(proj_image_points.astype(np.float32), 1), pattern_size)
 
     plt.figure(figsize=fig_size)
     plt.title(key)
-    plt.imshow(corners_image)
+    plt.imshow(corners_image, cmap='gray')
 
 
-def plot_projected_pcd(image, local_scene_points, undist_intrinsics, key, fig_size=(18, 18), normalize=False):
-    if normalize:
-        image = normalize_image(image)
-
+def plot_projected_pcd(image, local_scene_points, undist_intrinsics, key, fig_size=(18, 18)):
     h, w = image.shape[:2]
     pcd_image = np.zeros(image.shape)
 
@@ -65,28 +62,28 @@ def plot_projected_pcd(image, local_scene_points, undist_intrinsics, key, fig_si
     plt.imshow(np.clip(pcd_image + image / 255, 0, 1))
 
 
-def plot_epipolar_lines(image1, image2, loc_kp1, loc_kp2, key1, key2, F, pattern_size, normalize=(True, True)):
+def plot_epipolar_lines(image1, image2, loc_kp1, loc_kp2, key1, key2, F, pattern_size):
     fig, axes = plt.subplots(2, 2, figsize=(18, 12))
 
     ep_lines1 = cv.computeCorrespondEpilines(loc_kp2, 2, F).reshape(-1, 3)
     ep_lines2 = cv.computeCorrespondEpilines(loc_kp1, 1, F).reshape(-1, 3)
 
     ep_lines_image1 = draw_ep_lines(np.copy(image1), ep_lines1, loc_kp1)
-    det_image2 = draw_chessboard_corners(np.copy(image2), loc_kp2, pattern_size, normalize[1])
+    det_image2 = draw_chessboard_corners(np.copy(image2), loc_kp2, pattern_size)
 
     ep_lines_image2 = draw_ep_lines(np.copy(image2), ep_lines2, loc_kp2)
-    det_image1 = draw_chessboard_corners(np.copy(image1), loc_kp1, pattern_size, normalize[0])
+    det_image1 = draw_chessboard_corners(np.copy(image1), loc_kp1, pattern_size)
 
-    axes[0][0].imshow(ep_lines_image1)
+    axes[0][0].imshow(ep_lines_image1, cmap='gray')
     axes[0][0].set_title(key1)
 
-    axes[0][1].imshow(det_image2)
+    axes[0][1].imshow(det_image2, cmap='gray')
     axes[0][1].set_title(key2)
 
-    axes[1][0].imshow(det_image1)
+    axes[1][0].imshow(det_image1, cmap='gray')
     axes[1][0].set_title(key1)
 
-    axes[1][1].imshow(ep_lines_image2)
+    axes[1][1].imshow(ep_lines_image2, cmap='gray')
     axes[1][1].set_title(key2)
 
 
@@ -95,12 +92,8 @@ Support utils
 """
 
 
-def draw_chessboard_corners(image, loc_kp, pattern_size, normalize=False):
+def draw_chessboard_corners(image, loc_kp, pattern_size):
     det_img = np.copy(image)
-
-    if normalize:
-        det_img = normalize_image(det_img.astype(np.float32))
-
     det_img = cv.drawChessboardCorners(det_img, pattern_size, loc_kp, True)
 
     return det_img
@@ -122,7 +115,14 @@ def draw_ep_lines(image, ep_line, loc_kp):
 
 
 def normalize_image(image):
-    return image / image.reshape(-1, 3).max(axis=0).reshape(1, 1, 3)
+    if len(image.shape) == 3:
+        return image / image.reshape(-1, 3).max(axis=0).reshape(1, 1, 3)
+
+    elif len(image.shape) == 2:
+        return image / image.max()
+
+    else:
+        raise NotImplementedError
 
 
 def to_open3d(pcd):

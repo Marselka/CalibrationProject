@@ -4,8 +4,10 @@ from scipy.interpolate import griddata
 from scipy.linalg import svd
 from scipy.optimize import least_squares
 
+from scipy.spatial.transform import Rotation
 
-def detect_keypoints(images, pattern_size, edge_length=1.0):
+
+def detect_keypoints(images, pattern_size, edge_length=1.0, invert=False):
     """
     :param edge_length: The length of the edge of a single quad in meters
     """
@@ -20,53 +22,56 @@ def detect_keypoints(images, pattern_size, edge_length=1.0):
     detections = {}
 
     for key, img in images.items():
-        if img.shape[-1] == 3:
+        # Ordinary image with 0 - 255
+        if len(img.shape) == 3 and img.shape[-1] == 3:
             gray_img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
 
-        elif img.shape[-1] == 4:
-            gray_img = cv.cvtColor(img, cv.COLOR_BGRA2GRAY)
+        # Infra-red image
+        elif len(img.shape) == 2:
+            gray_img = img
 
         else:
             raise NotImplementedError
 
-        success, kp = cv.findChessboardCorners(gray_img, pattern_size, None)
+        success, kp = cv.findChessboardCorners(gray_img, pattern_size,
+                                               flags=cv.CALIB_CB_ADAPTIVE_THRESH + cv.CALIB_CB_NORMALIZE_IMAGE + cv.CALIB_CB_FAST_CHECK)
 
         if success:
-            loc_kp = cv.cornerSubPix(gray_img, kp, (11, 11), (-1, -1), criteria)
+            kp = cv.cornerSubPix(gray_img, kp, (11, 11), (-1, -1), criteria)
 
-            detections[key] = (scene_points, loc_kp)
+            if invert:
+                kp = kp[::-1, :, :]
+
+            detections[key] = (scene_points, kp)
 
     return detections
 
 
-def undistort_intrinsics(images, intrinsics, dist_coeff):
-    shape = next(iter(images.values())).shape[::-1][1:]
+def undistort_intrinsics(shape, intrinsics, dist_coeff):
     undist_intrinsics, _ = cv.getOptimalNewCameraMatrix(intrinsics, dist_coeff, shape, 1, shape)
 
     return undist_intrinsics
 
 
-def undistort_images(images, intrinsics, dist_coeff, undist_intrinsics):
+def undistort_images(images, intrinsics, dist_coeff, undist_intrinsics, inter_method):
     undist_images = {}
 
-    for key, img in images.items():
-        undist_img = cv.undistort(img, intrinsics, dist_coeff, None, undist_intrinsics)
+    for key, image in images.items():
+        if len(image.shape) == 3:
+            shape = image.shape[::-1][1:]
 
-        undist_images[key] = undist_img
+        elif len(image.shape) == 2:
+            shape = image.shape[::-1]
+
+        else:
+            raise NotImplementedError
+
+        map_x, map_y = cv.initUndistortRectifyMap(intrinsics, dist_coeff, None, undist_intrinsics, shape, cv.CV_32FC1)
+        undist_image = cv.remap(image, map_x, map_y, inter_method)
+
+        undist_images[key] = undist_image
 
     return undist_images
-
-
-def undistort_depths(depths, intrinsics, dist_coeff, undist_intrinsics):
-    undist_depths = {}
-
-    for key, depth in depths.items():
-        map_x, map_y = cv.initUndistortRectifyMap(intrinsics, dist_coeff, None, undist_intrinsics, depth.shape[::-1], cv.CV_32FC1)
-        undist_depth = cv.remap(depth, map_x, map_y, cv.INTER_NEAREST)
-
-        undist_depths[key] = undist_depth
-
-    return undist_depths
 
 
 def pointcloudify_depths(depths, undist_intrinsics):
@@ -152,17 +157,10 @@ def optimize_pose_lm(T, kp1, kp2, K1, K2, batch=False):
 
     x = encode_essmat(T)
 
-    if batch:
-        iK1 = [np.linalg.inv(k1i) for k1i in K1]
-        iK2 = [np.linalg.inv(k2i) for k2i in K2]
+    iK1 = np.linalg.inv(K1)
+    iK2 = np.linalg.inv(K2)
 
-        lm_opt = least_squares(loss_fun_pose_batch, x, jac=loss_fun_pose_jac_batch, args=(kp1, kp2, iK1, iK2), method='lm')
-
-    else:
-        iK1 = np.linalg.inv(K1)
-        iK2 = np.linalg.inv(K2)
-
-        lm_opt = least_squares(loss_fun_pose, x, jac=loss_fun_pose_jac, args=(kp1, kp2, iK1, iK2), method='lm')
+    lm_opt = least_squares(loss_fun_pose, x, jac=loss_fun_pose_jac, args=(kp1, kp2, iK1, iK2), method='lm')
 
     if lm_opt.success:
         avg_ep_dist = np.abs(lm_opt.fun).mean()
@@ -185,14 +183,10 @@ def optimize_pose_lm(T, kp1, kp2, K1, K2, batch=False):
         return None
 
 
-def optimize_translation_lm(T, local_kp1, kp2, K2, batch=False):
+def optimize_translation_lm(T, local_kp1, kp2, K2):
     m = 1
 
-    if batch:
-        lm_opt = least_squares(loss_fun_tr_batch, m, args=(T, local_kp1, kp2, K2), method='lm')
-
-    else:
-        lm_opt = least_squares(loss_fun_tr, m, args=(T, local_kp1, kp2, K2), method='lm')
+    lm_opt = least_squares(loss_fun_tr, m, args=(T, local_kp1, kp2, K2), method='lm')
 
     if lm_opt.success:
         avg_norm = np.abs(lm_opt.fun).mean()
@@ -208,6 +202,25 @@ def optimize_translation_lm(T, local_kp1, kp2, K2, batch=False):
 
     else:
         return None
+
+
+def average_transforms(T):
+    R_quat = []
+    t = []
+
+    for Ti in T:
+        R_quat.append(Rotation.from_matrix(Ti[:3, :3]).as_quat())
+        t.append(Ti[:3, 3])
+
+    R_quat = np.mean(np.array(R_quat), axis=0)
+    t = np.mean(np.array(t), axis=0)
+
+    T_final = np.zeros((4, 4))
+    T_final[:3, :3] = Rotation.from_quat(R_quat).as_matrix()
+    T_final[:3, 3] = t
+    T_final[3, 3] = 1
+
+    return T_final
 
 
 """
@@ -275,23 +288,6 @@ def compose_ess_mat(T):
     return E
 
 
-def loss_fun_tr_batch(m, T, local_kp1, loc_kp2, K2):
-    T = np.copy(T)
-    T[:3, 3] = m * T[:3, 3]
-
-    norm_diff_batch = []
-
-    for local_kp1i, loc_kp2i, K2i in zip(local_kp1, loc_kp2, K2):
-        t_local_kp1i = to_cartesian((T @ to_homogeneous(local_kp1i).transpose()).transpose())
-        p_local_kp1i = project2image(t_local_kp1i, K2i)
-
-        norm_diff = np.linalg.norm(p_local_kp1i - loc_kp2i, axis=-1).reshape(-1)
-
-        norm_diff_batch.append(norm_diff)
-
-    return np.concatenate(norm_diff_batch, axis=0)
-
-
 def loss_fun_tr(m, T, local_kp1, loc_kp2, K2):
     T = np.copy(T)
     T[:3, 3] = m * T[:3, 3]
@@ -302,24 +298,6 @@ def loss_fun_tr(m, T, local_kp1, loc_kp2, K2):
     norm_diff = np.linalg.norm(p_local_kp1 - loc_kp2, axis=-1).reshape(-1)
 
     return norm_diff
-
-
-def loss_fun_pose_batch(x, kp1, kp2, iK1, iK2):
-    errs_batch = []
-
-    for kp1i, kp2i, ik1i, ik2i in zip(kp1, kp2, iK1, iK2):
-        errs_batch.append(loss_fun_pose(x, kp1i, kp2i, ik1i, ik2i))
-
-    return np.concatenate(errs_batch, axis=0)
-
-
-def loss_fun_pose_jac_batch(x, kp1, kp2, iK1, iK2):
-    dres_batch = []
-
-    for kp1i, kp2i, ik1i, ik2i in zip(kp1, kp2, iK1, iK2):
-        dres_batch.append(loss_fun_pose_jac(x, kp1i, kp2i, ik1i, ik2i))
-
-    return np.concatenate(dres_batch, axis=0)
 
 
 def loss_fun_pose(x, kp1, kp2, iK1, iK2):
@@ -468,3 +446,38 @@ def rotate_a_b_axis_angle(a, b):
 
     aa = rot_axis / np.clip(np.linalg.norm(rot_axis), a_min=1e-16, a_max=None) * theta
     return aa
+
+
+# def loss_fun_tr_batch(m, T, local_kp1, loc_kp2, K2):
+#     T = np.copy(T)
+#     T[:3, 3] = m * T[:3, 3]
+#
+#     norm_diff_batch = []
+#
+#     for local_kp1i, loc_kp2i, K2i in zip(local_kp1, loc_kp2, K2):
+#         t_local_kp1i = to_cartesian((T @ to_homogeneous(local_kp1i).transpose()).transpose())
+#         p_local_kp1i = project2image(t_local_kp1i, K2i)
+#
+#         norm_diff = np.linalg.norm(p_local_kp1i - loc_kp2i, axis=-1).reshape(-1)
+#
+#         norm_diff_batch.append(norm_diff)
+#
+#     return np.concatenate(norm_diff_batch, axis=0)
+
+
+# def loss_fun_pose_batch(x, kp1, kp2, iK1, iK2):
+#     errs_batch = []
+#
+#     for kp1i, kp2i, ik1i, ik2i in zip(kp1, kp2, iK1, iK2):
+#         errs_batch.append(loss_fun_pose(x, kp1i, kp2i, ik1i, ik2i))
+#
+#     return np.concatenate(errs_batch, axis=0)
+
+
+# def loss_fun_pose_jac_batch(x, kp1, kp2, iK1, iK2):
+#     dres_batch = []
+#
+#     for kp1i, kp2i, ik1i, ik2i in zip(kp1, kp2, iK1, iK2):
+#         dres_batch.append(loss_fun_pose_jac(x, kp1i, kp2i, ik1i, ik2i))
+#
+#     return np.concatenate(dres_batch, axis=0)
