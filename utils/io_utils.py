@@ -24,6 +24,20 @@ def get_matching_pairs(folder_path1, folder_path2, file_filter='\d{5}.*\.(png|jp
     return timestamps1.astype(np.str), timestamps2.astype(np.str)
 
 
+def get_matching_in_range(timestamp, folder_path1, step=1, k=5, file_filter='\d{5}.*\.(png|jpg|jpeg)$'):
+    file_names1 = sorted(filter_files(os.listdir(folder_path1), file_filter), key=str.lower)
+    timestamps1 = np.array([int(fn.split('.')[0]) for fn in file_names1])
+
+    idx = np.where(timestamps1 == int(timestamp))[0].item()
+
+    closest_timestamps = []
+
+    for i in range(idx - step * k, idx + step * k, step):
+        closest_timestamps.append(timestamps1[i])
+
+    return np.array(closest_timestamps).astype(np.str)
+
+
 """
 Functions for reading the data
 """
@@ -162,12 +176,12 @@ def load_pcd(file_path):
 
 def load_depth(file_path):
     if file_path.lower().endswith('npy'):
-        pcd = np.load(file_path)
+        depth = np.load(file_path)
 
     else:
         return None
 
-    return pcd
+    return depth
 
 
 def filter_files(file_names, file_filter):

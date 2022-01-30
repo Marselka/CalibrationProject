@@ -1,8 +1,14 @@
 import cv2 as cv
 import numpy as np
 import open3d
+import pandas as pd
+from scipy import signal
 from scipy.signal import convolve2d
+from scipy.ndimage.filters import minimum_filter
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import matplotlib.cm as cm
+
 
 from utils.calib_utils import project2image
 
@@ -40,9 +46,20 @@ def plot_projected_keypoints(image, local_scene_points, undist_intrinsics, key, 
     plt.imshow(corners_image, cmap='gray')
 
 
+def group_min(groups, data):
+    # sort with major key groups, minor key data
+    order = np.lexsort((data, groups))
+    groups = groups[order] # this is only needed if groups is unsorted
+    data = data[order]
+    # construct an index which marks borders between groups
+    index = np.empty(len(groups), 'bool')
+    index[0] = True
+    index[1:] = groups[1:] != groups[:-1]
+    return index
+
+
 def plot_projected_pcd(image, local_scene_points, undist_intrinsics, key, fig_size=(18, 18)):
     h, w = image.shape[:2]
-    pcd_image = np.zeros(image.shape)
 
     d = np.linalg.norm(local_scene_points, axis=-1)
 
@@ -54,12 +71,24 @@ def plot_projected_pcd(image, local_scene_points, undist_intrinsics, key, fig_si
     proj_pcd = proj_pcd[proj_mask, :]
     d = d[proj_mask]
 
-    pcd_image[proj_pcd[:, 1], proj_pcd[:, 0], 0] = 1 / d
-    pcd_image[:, :, 0] = convolve2d(pcd_image[:, :, 0], np.ones((3, 3)), mode='same')
+    max_value = d.max() * 2
+
+    pcd_image = np.ones((h, w)) * max_value
+
+    pcd_image[proj_pcd[:, 1], proj_pcd[:, 0]] = d
+    pcd_image = minimum_filter(pcd_image, footprint=np.ones((5, 5)))
+    pcd_image[pcd_image == max_value] = 0.0
+
+    normalize = mcolors.Normalize(vmin=np.min(pcd_image), vmax=np.max(pcd_image))
+    s_map = cm.ScalarMappable(norm=normalize, cmap=cm.viridis)
+
+    pcd_image_rgba = s_map.to_rgba(pcd_image) * (1 - np.expand_dims(pcd_image == 0.0, -1))
 
     plt.figure(figsize=fig_size)
     plt.title(key)
-    plt.imshow(np.clip(pcd_image + image / 255, 0, 1))
+    plt.imshow(image)
+    plt.imshow(pcd_image_rgba, alpha=0.3)
+
 
 
 def plot_epipolar_lines(image1, image2, loc_kp1, loc_kp2, key1, key2, F, pattern_size):
@@ -130,3 +159,10 @@ def to_open3d(pcd):
     o3d_pcd.points = open3d.utility.Vector3dVector(pcd)
 
     return o3d_pcd
+
+
+def gaussian_kernel(size, std=1):
+    gkern1d = signal.gaussian(size, std=std).reshape(size, 1)
+    gkern2d = np.outer(gkern1d, gkern1d)
+    return gkern2d
+
