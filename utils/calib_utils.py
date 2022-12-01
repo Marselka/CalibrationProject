@@ -1,10 +1,19 @@
 import cv2 as cv
 import numpy as np
+
+from cv2 import aruco
 from scipy.interpolate import griddata
 from scipy.linalg import svd
 from scipy.optimize import least_squares
 
 from scipy.spatial.transform import Rotation
+
+from utils.common_utils import find_nearest_mutual
+
+
+"""
+Keypoint detection functions
+"""
 
 
 def detect_keypoints(images, pattern_size, edge_length=1.0, invert=False):
@@ -47,14 +56,65 @@ def detect_keypoints(images, pattern_size, edge_length=1.0, invert=False):
     return detections
 
 
+def detect_charuco_keypoints(images,
+                             squares_x, squares_y,
+                             square_length,
+                             marker_length):
+    dictionary = aruco.Dictionary_get(aruco.DICT_5X5_250)
+
+    charuco_board = aruco.CharucoBoard_create(squaresX=squares_x,
+                                              squaresY=squares_y,
+                                              squareLength=square_length,
+                                              markerLength=marker_length,
+                                              dictionary=dictionary)
+
+    detections = {}
+
+    for key, img in images.items():
+        gray_img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+
+        kp, ids, _ = aruco.detectMarkers(image=gray_img,
+                                         dictionary=dictionary)
+
+        if len(kp) > 20:
+            _, loc_kp, charuco_ids = aruco.interpolateCornersCharuco(markerCorners=kp,
+                                                                     markerIds=ids,
+                                                                     image=gray_img,
+                                                                     board=charuco_board)
+
+            detections[key.split('.')[0]] = (loc_kp, charuco_ids)
+
+    return detections
+
+
+def align_charuco_detections(detections1, detections2):
+    aligned_detections1, aligned_detections2 = {}, {}
+
+    for key1, key2 in zip(detections1.keys(), detections2.keys()):
+        kp1, charuco_ids1 = detections1[key1]
+        kp2, charuco_ids2 = detections2[key2]
+
+        mnn_mask, nn_indices1 = find_nearest_mutual(charuco_ids1, charuco_ids2)
+
+        aligned_detections1[key1] = np.squeeze(kp1[mnn_mask], 1)
+        aligned_detections2[key2] = np.squeeze(kp2[nn_indices1][mnn_mask], 1)
+
+    return aligned_detections1, aligned_detections2
+
+
+"""
+Local frame transformation utils
+"""
+
+
 def undistort_intrinsics(shape, intrinsics, dist_coeff):
-    undist_intrinsics, _ = cv.getOptimalNewCameraMatrix(intrinsics, dist_coeff, shape, 1, shape)
+    uintrinsics, _ = cv.getOptimalNewCameraMatrix(intrinsics, dist_coeff, shape, 1, shape)
 
-    return undist_intrinsics
+    return uintrinsics
 
 
-def undistort_images(images, intrinsics, dist_coeff, undist_intrinsics, inter_method):
-    undist_images = {}
+def undistort_images(images, intrinsics, dist_coeff, uintrinsics, inter_method):
+    uimages = {}
 
     for key, image in images.items():
         if len(image.shape) == 3:
@@ -66,12 +126,25 @@ def undistort_images(images, intrinsics, dist_coeff, undist_intrinsics, inter_me
         else:
             raise NotImplementedError
 
-        map_x, map_y = cv.initUndistortRectifyMap(intrinsics, dist_coeff, None, undist_intrinsics, shape, cv.CV_32FC1)
-        undist_image = cv.remap(image, map_x, map_y, inter_method)
+        map_x, map_y = cv.initUndistortRectifyMap(intrinsics, dist_coeff, None, uintrinsics, shape, cv.CV_32FC1)
+        uimage = cv.remap(image, map_x, map_y, inter_method)
 
-        undist_images[key] = undist_image
+        uimages[key] = uimage
 
-    return undist_images
+    return uimages
+
+
+def pointcloudify_azure_keypoints(img_kp, depth, img_extrinsics, img_intrinsics, depth_intrinsics):
+    nic_img_kp = to_normalized_image_coord(img_kp, img_intrinsics)
+    t_local_img_kp = to_cartesian((np.linalg.inv(img_extrinsics) @ to_homogeneous(nic_img_kp).T).T)
+
+    t_nic_img_kp = to_homogeneous(to_cartesian(t_local_img_kp))
+    depth_kp = project2image(t_nic_img_kp, depth_intrinsics)
+    local_depth_kp = pointcloudify_kp(depth_kp, t_nic_img_kp, depth)
+
+    local_kp = to_cartesian((img_extrinsics @ to_homogeneous(local_depth_kp).T).T)
+
+    return local_kp
 
 
 def pointcloudify_depths(depths, undist_intrinsics):
@@ -84,20 +157,27 @@ def pointcloudify_depths(depths, undist_intrinsics):
         grid = np.concatenate([np.expand_dims(grid_x, -1),
                                np.expand_dims(grid_y, -1)], axis=-1)
 
-        norm_grid = to_norm_image_coord(grid.reshape(-1, 2), undist_intrinsics)
+        nic_grid = to_normalized_image_coord(grid.reshape(-1, 2), undist_intrinsics)
 
         # Raise by undistorted depth value from image plane to local camera space
-        local_grid = norm_grid * np.expand_dims(depth.reshape(-1), axis=-1)
+        local_grid = nic_grid * np.expand_dims(depth.reshape(-1), axis=-1)
 
         pcd_depths[key] = local_grid.astype(np.float32)
 
     return pcd_depths
 
 
-def plane2plane_transformation(plane_points1, plane_points2):
+"""
+Relative transformation utils
+"""
+
+
+def plane2plane_transformation(plane_points1, plane_points2,
+                               sing_thr=1e-3):
     """
     :param plane_points1: N x 3
     :param plane_points2: N x 3
+    :param sing_thr: float
     """
     centroid1, centroid2 = plane_points1.mean(axis=0), plane_points2.mean(axis=0)
 
@@ -109,11 +189,12 @@ def plane2plane_transformation(plane_points1, plane_points2):
     u, d, vt = svd(H, full_matrices=False)
 
     # If a singular value is close to zero then the general solution will not hold
-    num_sing = sum(d < 1e-10)
+    num_sing = sum(d < sing_thr)
     if num_sing == 1:
         w, v = np.linalg.eig(H.T @ H)
 
-        sing_mask = w > 1e-10
+        sing_mask = w > sing_thr**2
+
         s = sum([np.outer(vi, vi) / np.sqrt(wi) for wi, vi in zip(w[sing_mask], v[:, sing_mask].T)])
         s3 = np.outer(v[~sing_mask], v[~sing_mask])
 
@@ -143,7 +224,7 @@ def compose_fund_mat(T, K1, K2):
     return iK2.T @ E @ iK1
 
 
-def optimize_pose_lm(T, kp1, kp2, K1, K2, batch=False):
+def optimize_pose_lm(T, kp1, kp2, K1, K2):
     """
     :param T: 4 x 4
     :param kp1: list of N x 2 or N x 2
@@ -152,8 +233,6 @@ def optimize_pose_lm(T, kp1, kp2, K1, K2, batch=False):
     :param K2: list of 3 x 3 or 3 x 3
     """
     T = T.copy()
-    dist = np.linalg.norm(T[:3, 3])
-    T[:3, 3] /= dist
 
     x = encode_essmat(T)
 
@@ -173,7 +252,7 @@ def optimize_pose_lm(T, kp1, kp2, K1, K2, batch=False):
         t = np.zeros(3)
         t[0:2] = lm_opt.x[3:]
         t = cv.Rodrigues(t)[0][:, 2]
-        T[:3, 3] = t * dist
+        T[:3, 3] = t
 
         T[3, 3] = 1
 
@@ -183,10 +262,41 @@ def optimize_pose_lm(T, kp1, kp2, K1, K2, batch=False):
         return None
 
 
-def optimize_translation_lm(T, local_kp1, kp2, K2):
+def optimize_translation_lm(T, local_kp1, kp2, intrinsics2):
     m = 1
 
-    lm_opt = least_squares(loss_fun_tr, m, args=(T, local_kp1, kp2, K2), method='lm')
+    lm_opt = least_squares(loss_fun_tr,
+                           m,
+                           args=(T, local_kp1, kp2, intrinsics2), method='lm')
+
+    if lm_opt.success:
+        avg_norm = np.abs(lm_opt.fun).mean()
+
+        print("Avg. l2-norm:", avg_norm)
+        print("Number of iters:", lm_opt.nfev)
+        print("Translation scale:", lm_opt.x[0])
+
+        T = np.copy(T)
+        T[:3, 3] = lm_opt.x[0] * T[:3, 3]
+
+        return T, avg_norm
+
+    else:
+        return None
+
+
+def optimize_translation_lm_mutual(T,
+                                   local_kp1, local_kp2,
+                                   kp1, kp2,
+                                   intrinsics1, intrinsics2):
+    m = 1
+
+    lm_opt = least_squares(loss_fun_tr_mutual,
+                           m,
+                           args=(T,
+                                 local_kp1, local_kp2,
+                                 kp1, kp2,
+                                 intrinsics1, intrinsics2), method='lm')
 
     if lm_opt.success:
         avg_norm = np.abs(lm_opt.fun).mean()
@@ -224,16 +334,16 @@ def average_transforms(T):
 
 
 """
-Utils
+Support utils
 """
 
 
-def to_norm_image_coord(loc_kp, intrinsics):
+def to_normalized_image_coord(kp, intrinsics):
     """
-    :param loc_kp: N x 2
+    :param kp: N x 2
     :param intrinsics: 3 x 3
     """
-    return (np.linalg.inv(intrinsics) @ to_homogeneous(loc_kp).transpose()).transpose()
+    return (np.linalg.inv(intrinsics) @ to_homogeneous(kp).transpose()).transpose()
 
 
 def project2image(scene_points, intrinsics):
@@ -244,25 +354,25 @@ def project2image(scene_points, intrinsics):
     return to_cartesian((intrinsics @ scene_points.transpose()).transpose())
 
 
-def transform2local(loc_kp, norm_loc_kp, depth):
+def pointcloudify_kp(kp, nic_kp, depth):
     """
-    :param loc_kp: N x 2
-    :param norm_loc_kp: N x 2
+    :param kp: N x 2
+    :param nic_kp: N x 2
     :param depth: H x W
     """
-    loc_kp_depth = interpolate(depth, loc_kp)
+    kp_depth = interpolate(depth, kp)
 
-    local_loc_kp = norm_loc_kp * np.expand_dims(loc_kp_depth.reshape(-1), axis=-1)
+    local_kp = nic_kp * np.expand_dims(kp_depth.reshape(-1), axis=-1)
 
-    return local_loc_kp
+    return local_kp
 
 
-def interpolate(grid_values, points):
+def interpolate(grid_values, points, method='nearest'):
     grid_x, grid_y = np.meshgrid(np.arange(grid_values.shape[1]), np.arange(grid_values.shape[0]))
     grid = np.concatenate([np.expand_dims(grid_x, -1),
                            np.expand_dims(grid_y, -1)], axis=-1)
 
-    return griddata(grid.reshape(-1, 2), grid_values.reshape(-1), points, method='nearest', fill_value=0)
+    return griddata(grid.reshape(-1, 2), grid_values.reshape(-1), points, method=method, fill_value=0)
 
 
 def to_homogeneous(t):
@@ -288,16 +398,31 @@ def compose_ess_mat(T):
     return E
 
 
-def loss_fun_tr(m, T, local_kp1, loc_kp2, K2):
+def loss_fun_tr(m, T, local_kp1, kp2, intrinsics2):
     T = np.copy(T)
     T[:3, 3] = m * T[:3, 3]
 
-    t_local_kp1 = to_cartesian((T @ to_homogeneous(local_kp1).transpose()).transpose())
-    p_local_kp1 = project2image(t_local_kp1, K2)
+    t_local_kp2 = to_cartesian((T @ to_homogeneous(local_kp1).transpose()).transpose())
+    t_nic_kp2 = project2image(t_local_kp2, intrinsics2)
 
-    norm_diff = np.linalg.norm(p_local_kp1 - loc_kp2, axis=-1).reshape(-1)
+    return np.linalg.norm(t_nic_kp2 - kp2, axis=-1).reshape(-1)
 
-    return norm_diff
+
+def loss_fun_tr_mutual(m, T,
+                       local_kp1, local_kp2,
+                       kp1, kp2,
+                       intrinsics1, intrinsics2):
+    T = np.copy(T)
+    T[:3, 3] = m * T[:3, 3]
+
+    t_local_kp2 = to_cartesian((T @ to_homogeneous(local_kp1).T).T)
+    t_nic_kp2 = project2image(t_local_kp2, intrinsics2)
+
+    t_local_kp1 = to_cartesian((np.linalg.inv(T) @ to_homogeneous(local_kp2).T).T)
+    t_nic_kp1 = project2image(t_local_kp1, intrinsics1)
+    
+    return np.concatenate([np.linalg.norm(t_nic_kp2 - kp2, axis=-1).reshape(-1),
+                           np.linalg.norm(t_nic_kp1 - kp1, axis=-1).reshape(-1)], axis=0)
 
 
 def loss_fun_pose(x, kp1, kp2, iK1, iK2):

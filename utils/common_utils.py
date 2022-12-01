@@ -48,3 +48,13 @@ def prepare_calib_input(images, detections, keys, ext=''):
 
     return scene_points, loc_kp, shape
 
+
+def find_nearest_mutual(t1, t2):
+    diff = np.abs(t1.reshape(-1, 1) - t2.reshape(1, -1))
+    nn_indices1 = np.argmin(diff, axis=-1)
+    nn_indices2 = np.argmin(diff, axis=-2)
+
+    mnn_mask = nn_indices2[nn_indices1] == np.arange(len(nn_indices1))
+
+    return mnn_mask, nn_indices1
+

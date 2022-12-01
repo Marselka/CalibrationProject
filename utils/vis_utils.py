@@ -2,6 +2,8 @@ import cv2 as cv
 import numpy as np
 import open3d
 import pandas as pd
+
+from cv2 import aruco
 from scipy import signal
 from scipy.signal import convolve2d
 from scipy.ndimage.filters import minimum_filter
@@ -58,7 +60,10 @@ def group_min(groups, data):
     return index
 
 
-def plot_projected_pcd(image, local_scene_points, undist_intrinsics, key, fig_size=(18, 18)):
+def plot_projected_pcd(image,
+                       local_scene_points, undist_intrinsics,
+                       key,
+                       fig_size=(18, 18), alpha=0.3):
     h, w = image.shape[:2]
 
     d = np.linalg.norm(local_scene_points, axis=-1)
@@ -87,21 +92,21 @@ def plot_projected_pcd(image, local_scene_points, undist_intrinsics, key, fig_si
     plt.figure(figsize=fig_size)
     plt.title(key)
     plt.imshow(image)
-    plt.imshow(pcd_image_rgba, alpha=0.3)
+    plt.imshow(pcd_image_rgba, alpha=alpha)
 
 
 
-def plot_epipolar_lines(image1, image2, loc_kp1, loc_kp2, key1, key2, F, pattern_size):
+def plot_epipolar_lines_chess(image1, image2, kp1, kp2, key1, key2, F, pattern_size):
     fig, axes = plt.subplots(2, 2, figsize=(18, 12))
 
-    ep_lines1 = cv.computeCorrespondEpilines(loc_kp2, 2, F).reshape(-1, 3)
-    ep_lines2 = cv.computeCorrespondEpilines(loc_kp1, 1, F).reshape(-1, 3)
+    ep_lines1 = cv.computeCorrespondEpilines(kp2, 2, F).reshape(-1, 3)
+    ep_lines2 = cv.computeCorrespondEpilines(kp1, 1, F).reshape(-1, 3)
 
-    ep_lines_image1 = draw_ep_lines(np.copy(image1), ep_lines1, loc_kp1)
-    det_image2 = draw_chessboard_corners(np.copy(image2), loc_kp2, pattern_size)
+    ep_lines_image1 = draw_ep_lines(np.copy(image1), ep_lines1, kp1)
+    det_image2 = draw_chessboard_corners(np.copy(image2), kp2, pattern_size)
 
-    ep_lines_image2 = draw_ep_lines(np.copy(image2), ep_lines2, loc_kp2)
-    det_image1 = draw_chessboard_corners(np.copy(image1), loc_kp1, pattern_size)
+    ep_lines_image2 = draw_ep_lines(np.copy(image2), ep_lines2, kp2)
+    det_image1 = draw_chessboard_corners(np.copy(image1), kp1, pattern_size)
 
     axes[0][0].imshow(ep_lines_image1, cmap='gray')
     axes[0][0].set_title(key1)
@@ -116,29 +121,72 @@ def plot_epipolar_lines(image1, image2, loc_kp1, loc_kp2, key1, key2, F, pattern
     axes[1][1].set_title(key2)
 
 
+def plot_epipolar_lines_points(image1, image2, kp1, kp2, key1, key2, F):
+    fig, axes = plt.subplots(2, 2, figsize=(18, 12))
+
+    ep_lines1 = cv.computeCorrespondEpilines(kp2, 2, F).reshape(-1, 3)
+    ep_lines2 = cv.computeCorrespondEpilines(kp1, 1, F).reshape(-1, 3)
+
+    ep_lines_image1 = draw_ep_lines(np.copy(image1), ep_lines1, kp1)
+    kp_image2 = draw_points(np.copy(image2), kp2)
+
+    ep_lines_image2 = draw_ep_lines(np.copy(image2), ep_lines2, kp2)
+    kp_image1 = draw_points(np.copy(image1), kp1)
+
+    axes[0][0].imshow(ep_lines_image1, cmap='gray')
+    axes[0][0].set_title(key1)
+
+    axes[0][1].imshow(kp_image2, cmap='gray')
+    axes[0][1].set_title(key2)
+
+    axes[1][0].imshow(kp_image1, cmap='gray')
+    axes[1][0].set_title(key1)
+
+    axes[1][1].imshow(ep_lines_image2, cmap='gray')
+    axes[1][1].set_title(key2)
+
+
 """
 Support utils
 """
 
 
-def draw_chessboard_corners(image, loc_kp, pattern_size):
+def draw_chessboard_corners(image, kp, pattern_size):
     det_img = np.copy(image)
-    det_img = cv.drawChessboardCorners(det_img, pattern_size, loc_kp, True)
+    det_img = cv.drawChessboardCorners(det_img, pattern_size, kp, True)
 
     return det_img
 
 
-def draw_ep_lines(image, ep_line, loc_kp):
+def draw_charuco_corners(image, kp, charuco_ids):
+    det_img = np.copy(image)
+    det_img = aruco.drawDetectedCornersCharuco(image=det_img,
+                                               charucoCorners=kp,
+                                               charucoIds=charuco_ids)
+
+    return det_img
+
+
+def draw_points(image, points, point_size=5, color=(0, 255, 0)):
+    image = np.copy(image)
+
+    for p in points:
+        image = cv.circle(image, tuple(p), point_size, color, -1)
+
+    return image
+
+
+def draw_ep_lines(image, ep_line, kp):
     c = image.shape[1]
 
-    for l, lk in zip(ep_line, loc_kp):
+    for l, k in zip(ep_line, kp):
         color = tuple(np.random.randint(0, 255, 3).tolist())
 
         x0, y0 = map(int, [0, -l[2] / l[1]])
         x1, y1 = map(int, [c, -(l[2] + l[0] * c) / l[1]])
 
         image = cv.line(image, (x0, y0), (x1, y1), color, 1, lineType=cv.LINE_AA)
-        image = cv.circle(image, tuple(lk[0]), 5, color, -1)
+        image = cv.circle(image, tuple(k), 5, color, -1)
 
     return image
 
