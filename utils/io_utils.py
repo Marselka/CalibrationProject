@@ -260,3 +260,34 @@ def load_json(file_path):
 def filter_files(file_names, file_filter):
     return [fn for fn in file_names if re.match(file_filter, fn)]
 
+
+def get_calib_params_from_json(file, camera):
+    assert camera == 'color' or camera == 'ir' or camera == 'depth', (
+    'camera must be "color", "ir" or "depth"')
+    
+    with open(file) as json_file:
+        data = json.load(json_file)['color_camera' if camera == 'color' else 'depth_camera']
+    cp = data['intrinsics']['parameters']['parameters_as_dict']
+    K = np.eye(3)
+    K[0,2] = cp['cx']
+    K[1,2] = cp['cy']
+    K[0,0] = cp['fx']
+    K[1,1] = cp['fy']
+    
+    dist = np.array([cp['k1'], cp['k2'], cp['p1'], cp['p2'], 
+            cp['k3'], cp['k4'], cp['k5'], cp['k6']])
+    #dist = list(map(float, dist))
+    size = np.array([data['resolution_width'],
+                     data['resolution_height']
+                    ])
+    return {'K' : K, 'dist' : dist, 'size' : size, 'cp' : cp}
+
+
+def get_opencv_dist_coeffs_from_azure_calib_dict(calib_params):
+    '''Arrange dist. coeffs from Azure calib_params to be compatible with
+    OpenCV convention.
+    Return np array of the form [k1, k2, p1, p2, k3, k4, k5, k6] with 8 coeffs
+    '''
+    coeffs = calib_params['cp']
+    return np.array([coeffs['k1'], coeffs['k2'], coeffs['p1'], coeffs['p2'], 
+            coeffs['k3'], coeffs['k4'], coeffs['k5'], coeffs['k6']])
